@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Email Templates</title>
+  <!-- Office.js — the bridge between your code and Outlook -->
+  <script src="https://appsforoffice.microsoft.com/lib/1/hosted/office.js"></script>
+  <style>
+    :root {
+      --accent:    #0F6E56;
+      --accent-lt: #E1F5EE;
+      --border:    #D3D1C7;
+      --text:      #2C2C2A;
+      --muted:     #5F5E5A;
+      --bg:        #FFFFFF;
+      --surface:   #F1EFE8;
+    }
+
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      font-family: 'Segoe UI', system-ui, sans-serif;
+      font-size: 13px;
+      color: var(--text);
+      background: var(--bg);
+      height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* ── Header ── */
+    header {
+      padding: 14px 16px 10px;
+      border-bottom: 1px solid var(--border);
+      background: var(--bg);
+    }
+    header h1 {
+      font-size: 15px;
+      font-weight: 600;
+      color: var(--accent);
+      letter-spacing: -0.2px;
+    }
+    header p {
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 2px;
+    }
+
+    /* ── Search + filter bar ── */
+    .toolbar {
+      padding: 10px 16px;
+      display: flex;
+      gap: 8px;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .search-wrap {
+      position: relative;
+      flex: 1;
+    }
+    .search-wrap svg {
+      position: absolute;
+      left: 8px;
+      top: 50%;
+      transform: translateY(-50%);
+      color: var(--muted);
+    }
+    input[type="search"] {
+      width: 100%;
+      height: 32px;
+      padding: 0 8px 0 30px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 12px;
+      background: var(--bg);
+      outline: none;
+    }
+    input[type="search"]:focus { border-color: var(--accent); }
+
+    select {
+      height: 32px;
+      padding: 0 8px;
+      border: 1px solid var(--border);
+      border-radius: 6px;
+      font-size: 12px;
+      background: var(--bg);
+      color: var(--text);
+      outline: none;
+      cursor: pointer;
+    }
+    select:focus { border-color: var(--accent); }
+
+    /* ── Template list ── */
+    .list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 0;
+    }
+
+    .template-item {
+      padding: 10px 16px;
+      cursor: pointer;
+      border-bottom: 1px solid var(--border);
+      transition: background 0.1s;
+    }
+    .template-item:hover { background: var(--surface); }
+    .template-item.selected { background: var(--accent-lt); }
+
+    .template-name {
+      font-weight: 600;
+      font-size: 12px;
+      margin-bottom: 2px;
+    }
+    .template-subject {
+      font-size: 11px;
+      color: var(--muted);
+      margin-bottom: 4px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .template-tags {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
+    .tag {
+      font-size: 10px;
+      padding: 1px 6px;
+      border-radius: 10px;
+      background: var(--accent-lt);
+      color: var(--accent);
+      font-weight: 500;
+    }
+
+    /* ── Preview panel ── */
+    .preview-panel {
+      border-top: 2px solid var(--border);
+      background: var(--bg);
+      display: none;
+      flex-direction: column;
+      max-height: 260px;
+    }
+    .preview-panel.visible { display: flex; }
+
+    .preview-header {
+      padding: 8px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--border);
+      background: var(--surface);
+    }
+    .preview-header span {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+    .preview-body {
+      padding: 12px 16px;
+      overflow-y: auto;
+      flex: 1;
+      font-size: 12px;
+      line-height: 1.6;
+      color: var(--text);
+    }
+    .preview-body .subject-line {
+      font-weight: 600;
+      margin-bottom: 10px;
+      padding-bottom: 8px;
+      border-bottom: 1px solid var(--border);
+      color: var(--muted);
+    }
+
+    /* ── Footer action ── */
+    footer {
+      padding: 10px 16px;
+      border-top: 1px solid var(--border);
+      background: var(--bg);
+    }
+    .btn-insert {
+      width: 100%;
+      height: 36px;
+      background: var(--accent);
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      font-size: 13px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity 0.15s;
+    }
+    .btn-insert:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+    }
+    .btn-insert:not(:disabled):hover { opacity: 0.88; }
+
+    /* ── Status toast ── */
+    .toast {
+      position: fixed;
+      bottom: 60px;
+      left: 50%;
+      transform: translateX(-50%) translateY(20px);
+      background: var(--accent);
+      color: #fff;
+      font-size: 12px;
+      font-weight: 500;
+      padding: 7px 16px;
+      border-radius: 20px;
+      opacity: 0;
+      transition: all 0.2s;
+      pointer-events: none;
+      white-space: nowrap;
+    }
+    .toast.show {
+      opacity: 1;
+      transform: translateX(-50%) translateY(0);
+    }
+
+    .empty {
+      text-align: center;
+      padding: 40px 20px;
+      color: var(--muted);
+      font-size: 12px;
+    }
+  </style>
+</head>
+<body>
+
+<header>
+  <h1>📋 Email Templates</h1>
+  <p id="user-label">Loading…</p>
+</header>
+
+<div class="toolbar">
+  <div class="search-wrap">
+    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/>
+    </svg>
+    <input type="search" id="search" placeholder="Search templates…" />
+  </div>
+  <select id="cat-filter">
+    <option value="">All</option>
+    <option value="Sales">Sales</option>
+    <option value="Support">Support</option>
+    <option value="HR">HR</option>
+    <option value="Finance">Finance</option>
+  </select>
+</div>
+
+<div class="list" id="template-list"></div>
+
+<div class="preview-panel" id="preview-panel">
+  <div class="preview-header">
+    <span>Preview</span>
+    <button onclick="closePreview()" style="background:none;border:none;cursor:pointer;font-size:16px;color:var(--muted)">×</button>
+  </div>
+  <div class="preview-body" id="preview-body"></div>
+</div>
+
+<footer>
+  <button class="btn-insert" id="insert-btn" disabled onclick="insertTemplate()">
+    Select a template to insert
+  </button>
+</footer>
+
+<div class="toast" id="toast"></div>
+
+<script>
+  /* ── Mock template data (in production, this comes from SharePoint) ── */
+  const TEMPLATES = [
+    {
+      id: 1,
+      name: "Welcome — New Client",
+      category: "Sales",
+      subject: "Welcome to {{CompanyName}} — let's get started!",
+      html: `<p>Hi {{FirstName}},</p>
+<p>Welcome aboard! We're thrilled to have <strong>{{CompanyName}}</strong> as a client.</p>
+<p>Your dedicated account manager is <strong>{{AccountManager}}</strong>, who will reach out within 24 hours to schedule your onboarding call.</p>
+<p>In the meantime, feel free to reply to this email with any questions.</p>
+<p>Best regards,<br>{{SenderName}}</p>`,
+      tags: ["Sales", "Onboarding"]
+    },
+    {
+      id: 2,
+      name: "Follow-up — No Response",
+      category: "Sales",
+      subject: "Following up — {{ProposalTopic}}",
+      html: `<p>Hi {{FirstName}},</p>
+<p>I wanted to follow up on the proposal I sent over on {{ProposalDate}}. I know things get busy, so I just wanted to make sure it didn't get buried.</p>
+<p>Are you still interested in exploring {{ProposalTopic}}? Happy to jump on a quick call if that's easier.</p>
+<p>Best,<br>{{SenderName}}</p>`,
+      tags: ["Sales", "Follow-up"]
+    },
+    {
+      id: 3,
+      name: "Support — Ticket Acknowledged",
+      category: "Support",
+      subject: "We received your request [Ticket #{{TicketNumber}}]",
+      html: `<p>Hi {{FirstName}},</p>
+<p>Thanks for reaching out. We've received your support request and assigned it ticket number <strong>#{{TicketNumber}}</strong>.</p>
+<p>Our team will review your case and get back to you within <strong>{{SLAHours}} business hours</strong>.</p>
+<p>You can track your ticket status at any time by visiting our support portal.</p>
+<p>The Support Team</p>`,
+      tags: ["Support", "Ticket"]
+    },
+    {
+      id: 4,
+      name: "Support — Issue Resolved",
+      category: "Support",
+      subject: "Your support request has been resolved [#{{TicketNumber}}]",
+      html: `<p>Hi {{FirstName}},</p>
+<p>Great news — we've resolved the issue you reported in ticket <strong>#{{TicketNumber}}</strong>.</p>
+<p><strong>Resolution summary:</strong><br>{{ResolutionSummary}}</p>
+<p>Please don't hesitate to reply if the issue persists or if you have any follow-up questions.</p>
+<p>Best,<br>{{SenderName}}</p>`,
+      tags: ["Support", "Resolved"]
+    },
+    {
+      id: 5,
+      name: "HR — Interview Invitation",
+      category: "HR",
+      subject: "Interview Invitation — {{JobTitle}} at {{CompanyName}}",
+      html: `<p>Dear {{CandidateName}},</p>
+<p>Thank you for applying for the <strong>{{JobTitle}}</strong> position at <strong>{{CompanyName}}</strong>. We were impressed with your background and would like to invite you for an interview.</p>
+<p><strong>Date:</strong> {{InterviewDate}}<br>
+<strong>Time:</strong> {{InterviewTime}}<br>
+<strong>Format:</strong> {{InterviewFormat}}<br>
+<strong>Interviewer:</strong> {{InterviewerName}}</p>
+<p>Please confirm your availability by replying to this email.</p>
+<p>Kind regards,<br>{{HRName}}<br>HR Team</p>`,
+      tags: ["HR", "Recruiting"]
+    },
+    {
+      id: 6,
+      name: "Finance — Invoice Reminder",
+      category: "Finance",
+      subject: "Invoice #{{InvoiceNumber}} — Payment Due {{DueDate}}",
+      html: `<p>Dear {{ContactName}},</p>
+<p>This is a friendly reminder that invoice <strong>#{{InvoiceNumber}}</strong> for <strong>{{Amount}}</strong> is due on <strong>{{DueDate}}</strong>.</p>
+<p>If you have already arranged payment, please disregard this notice. Otherwise, please arrange payment at your earliest convenience.</p>
+<p>If you have any questions regarding this invoice, please don't hesitate to contact us.</p>
+<p>Thank you,<br>{{SenderName}}<br>Accounts Receivable</p>`,
+      tags: ["Finance", "Invoice"]
+    }
+  ];
+
+  let selectedTemplate = null;
+  let allTemplates = [...TEMPLATES];
+
+  /* ── Office.js initialisation ── */
+  Office.onReady((info) => {
+    if (info.host === Office.HostType.Outlook) {
+      const userProfile = Office.context.mailbox.userProfile;
+      document.getElementById('user-label').textContent =
+        `Signed in as ${userProfile.displayName}`;
+    } else {
+      // Running outside Outlook (e.g. browser preview)
+      document.getElementById('user-label').textContent = 'Preview mode (not in Outlook)';
+    }
+    renderList(allTemplates);
+  });
+
+  /* ── Rendering ── */
+  function renderList(templates) {
+    const el = document.getElementById('template-list');
+    if (templates.length === 0) {
+      el.innerHTML = '<div class="empty">No templates match your search.</div>';
+      return;
+    }
+    el.innerHTML = templates.map(t => `
+      <div class="template-item ${selectedTemplate?.id === t.id ? 'selected' : ''}"
+           onclick="selectTemplate(${t.id})">
+        <div class="template-name">${t.name}</div>
+        <div class="template-subject">${t.subject}</div>
+        <div class="template-tags">
+          ${t.tags.map(tag => `<span class="tag">${tag}</span>`).join('')}
+        </div>
+      </div>
+    `).join('');
+  }
+
+  function selectTemplate(id) {
+    selectedTemplate = TEMPLATES.find(t => t.id === id);
+    renderList(filterTemplates());
+
+    // Show preview
+    const panel = document.getElementById('preview-panel');
+    const body  = document.getElementById('preview-body');
+    panel.classList.add('visible');
+    body.innerHTML = `
+      <div class="subject-line">Subject: ${selectedTemplate.subject}</div>
+      ${selectedTemplate.html}
+    `;
+
+    // Enable insert button
+    const btn = document.getElementById('insert-btn');
+    btn.disabled = false;
+    btn.textContent = `Insert "${selectedTemplate.name}"`;
+  }
+
+  function closePreview() {
+    document.getElementById('preview-panel').classList.remove('visible');
+    selectedTemplate = null;
+    const btn = document.getElementById('insert-btn');
+    btn.disabled = true;
+    btn.textContent = 'Select a template to insert';
+    renderList(filterTemplates());
+  }
+
+  /* ── Filtering ── */
+  function filterTemplates() {
+    const q   = document.getElementById('search').value.toLowerCase();
+    const cat = document.getElementById('cat-filter').value;
+    return TEMPLATES.filter(t => {
+      const matchCat  = !cat || t.category === cat;
+      const matchText = !q   || t.name.toLowerCase().includes(q) ||
+                                t.subject.toLowerCase().includes(q) ||
+                                t.tags.some(tag => tag.toLowerCase().includes(q));
+      return matchCat && matchText;
+    });
+  }
+
+  document.getElementById('search').addEventListener('input', () => {
+    allTemplates = filterTemplates();
+    renderList(allTemplates);
+  });
+  document.getElementById('cat-filter').addEventListener('change', () => {
+    allTemplates = filterTemplates();
+    renderList(allTemplates);
+  });
+
+  /* ── The core action: insert into Outlook compose window ── */
+  function insertTemplate() {
+    if (!selectedTemplate) return;
+
+    const item = Office.context.mailbox.item;
+
+    // Set subject line
+    item.subject.setAsync(selectedTemplate.subject, (result) => {
+      if (result.status === Office.AsyncResultStatus.Failed) {
+        showToast('⚠️ Could not set subject');
+      }
+    });
+
+    // Insert HTML body
+    item.body.setAsync(
+      selectedTemplate.html,
+      { coercionType: Office.CoercionType.Html },
+      (result) => {
+        if (result.status === Office.AsyncResultStatus.Succeeded) {
+          showToast('✓ Template inserted!');
+        } else {
+          showToast('⚠️ Insert failed: ' + result.error.message);
+        }
+      }
+    );
+  }
+
+  function showToast(msg) {
+    const t = document.getElementById('toast');
+    t.textContent = msg;
+    t.classList.add('show');
+    setTimeout(() => t.classList.remove('show'), 2500);
+  }
+</script>
+</body>
+</html>
