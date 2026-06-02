@@ -1,15 +1,12 @@
 /* ═══════════════════════════════════════════════════════════════
    CONFIG
-   
-   CATALOG_URL: raw GitHub URL to templates.json in your repo.
-   To add/remove templates, edit templates.json and push to GitHub.
-   
-   Template HTML files still live in SharePoint — authors edit
-   them there freely. Only the catalog index lives on GitHub.
 ═══════════════════════════════════════════════════════════════ */
 const CONFIG = {
-  catalogUrl: "https://raw.githubusercontent.com/jtheriencovalenca/testtest/main/templates.json",
-  cacheTtl:   5 * 60 * 1000, // 5 minutes
+  clientId:  "11c5f03c-f563-423b-8856-e38996e4a608",
+  tenantId:  "a1e85217-6b31-4eae-8d92-687541ccf78c",
+  siteUrl:   "https://covalenca.sharepoint.com/sites/InnovationMarketing",
+  listName:  "EmailTemplatesCatalog",
+  cacheTtl:  5 * 60 * 1000,
 };
 
 /* ═══════════════════════════════════════════════════════════════
@@ -21,6 +18,7 @@ let activeCategory   = "All";
 let searchQuery      = "";
 let cacheTimestamp   = 0;
 let selectedTemplate = null;
+let accessToken      = null;
 
 /* ═══════════════════════════════════════════════════════════════
    OFFICE INIT
@@ -37,8 +35,61 @@ function init() {
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   LOAD CATALOG — fetches templates.json from GitHub (same origin,
-   no auth needed). Raw GitHub URLs are public and CORS-friendly.
+   AUTHENTICATION
+   
+   1. Ask Office for a bootstrap token (SSO via Office identity)
+   2. Exchange it at Azure AD for a SharePoint-scoped token
+      using the On-Behalf-Of flow
+   3. Use that token as Bearer on all SharePoint REST calls
+═══════════════════════════════════════════════════════════════ */
+async function getSharePointToken() {
+  if (accessToken) return accessToken;
+
+  // Step 1 — get the Office bootstrap token
+  const bootstrapToken = await new Promise((resolve, reject) => {
+    Office.context.auth.getAccessTokenAsync(
+      { allowSignInPrompt: true, allowConsentPrompt: true },
+      (result) => {
+        if (result.status === Office.AsyncResultStatus.Succeeded) {
+          resolve(result.value);
+        } else {
+          reject(new Error(result.error?.message || "Office SSO failed."));
+        }
+      }
+    );
+  });
+
+  // Step 2 — exchange for SharePoint token via OBO flow
+  const tokenEndpoint =
+    `https://login.microsoftonline.com/${CONFIG.tenantId}/oauth2/v2.0/token`;
+
+  const body = new URLSearchParams({
+    grant_type:         "urn:ietf:params:oauth:grant-type:jwt-bearer",
+    client_id:          CONFIG.clientId,
+    assertion:          bootstrapToken,
+    requested_token_use: "on_behalf_of",
+    scope:              "https://covalenca.sharepoint.com/AllSites.Read",
+  });
+
+  const response = await fetch(tokenEndpoint, {
+    method:  "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body,
+  });
+
+  const tokenData = await response.json();
+
+  if (!response.ok || !tokenData.access_token) {
+    console.error("[TemplateAddin] Token exchange failed:", tokenData);
+    throw new Error(tokenData.error_description || "Token exchange failed.");
+  }
+
+  accessToken = tokenData.access_token;
+  return accessToken;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   DATA FETCHING — SharePoint REST with Bearer token
 ═══════════════════════════════════════════════════════════════ */
 async function loadTemplates() {
   if (allTemplates.length > 0 && Date.now() - cacheTimestamp < CONFIG.cacheTtl) {
@@ -49,11 +100,33 @@ async function loadTemplates() {
   showState("loading");
 
   try {
-    const response = await fetch(CONFIG.catalogUrl + "?t=" + Date.now()); // bust CDN cache
-    if (!response.ok) throw new Error(`Could not load template catalog (${response.status}).`);
+    const token = await getSharePointToken();
+
+    const endpoint =
+      `${CONFIG.siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(CONFIG.listName)}')/items` +
+      `?$select=Title,Category,Description,TemplateFileUrl,IsActive` +
+      `&$filter=IsActive eq 1` +
+      `&$orderby=Category,Title` +
+      `&$top=500`;
+
+    const response = await fetch(endpoint, {
+      headers: {
+        "Accept":        "application/json;odata=nometadata",
+        "Authorization": `Bearer ${token}`,
+      },
+    });
+
+    if (!response.ok) {
+      // Token may have expired — clear and retry once
+      if (response.status === 401) {
+        accessToken = null;
+        throw new Error("Session expired. Please close and reopen the panel.");
+      }
+      throw new Error(`SharePoint returned ${response.status}: ${response.statusText}`);
+    }
 
     const data = await response.json();
-    allTemplates   = data.filter(t => t.isActive !== false); // exclude isActive: false
+    allTemplates   = data.value || [];
     cacheTimestamp = Date.now();
 
     buildCategoryPills();
@@ -61,27 +134,26 @@ async function loadTemplates() {
     spinRefresh(false);
 
   } catch (err) {
-    console.error("[TemplateAddin] Failed to load catalog:", err);
-    showState("error", err.message || "Could not load templates.json from GitHub.");
+    console.error("[TemplateAddin] Failed to load templates:", err);
+    showState("error", err.message || "Unknown error.");
     spinRefresh(false);
   }
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   FETCH TEMPLATE HTML FROM SHAREPOINT
-   
-   Uses credentials:"include" so the browser sends the user's
-   existing SharePoint session cookie. This works because OWA
-   runs in the same browser where the user is signed into M365.
-   No token or Azure AD setup needed.
+   FETCH TEMPLATE HTML FILE FROM SHAREPOINT
 ═══════════════════════════════════════════════════════════════ */
 async function fetchTemplateHtml(fileUrl) {
+  const token = await getSharePointToken();
+
   const response = await fetch(fileUrl, {
-    credentials: "include",
+    headers: {
+      "Authorization": `Bearer ${token}`,
+    },
   });
 
   if (!response.ok) {
-    throw new Error(`Could not fetch template file (${response.status}). Make sure the file exists in SharePoint and you have access.`);
+    throw new Error(`Could not fetch template file (${response.status}).`);
   }
 
   return await response.text();
@@ -93,6 +165,7 @@ async function fetchTemplateHtml(fileUrl) {
 function bindEvents() {
   document.getElementById("refreshBtn").addEventListener("click", () => {
     cacheTimestamp = 0;
+    accessToken    = null;
     loadTemplates();
     spinRefresh(true);
   });
@@ -102,7 +175,10 @@ function bindEvents() {
     applyFilters();
   });
 
-  document.getElementById("retryBtn").addEventListener("click", () => loadTemplates());
+  document.getElementById("retryBtn").addEventListener("click", () => {
+    accessToken = null;
+    loadTemplates();
+  });
 
   document.getElementById("previewClose").addEventListener("click",  closePreview);
   document.getElementById("previewCancel").addEventListener("click", closePreview);
@@ -120,7 +196,7 @@ function buildCategoryPills() {
   const bar = document.getElementById("categoryBar");
   bar.querySelectorAll(".cat-pill:not([data-cat='All'])").forEach(el => el.remove());
 
-  const categories = [...new Set(allTemplates.map(t => t.category).filter(Boolean))].sort();
+  const categories = [...new Set(allTemplates.map(t => t.Category).filter(Boolean))].sort();
   categories.forEach(cat => {
     const pill = document.createElement("button");
     pill.className   = "cat-pill";
@@ -130,7 +206,6 @@ function buildCategoryPills() {
     bar.appendChild(pill);
   });
 
-  // re-bind All pill (safe to rebind)
   const allPill = bar.querySelector("[data-cat='All']");
   allPill.onclick = () => selectCategory("All");
 }
@@ -148,11 +223,11 @@ function selectCategory(cat) {
 ═══════════════════════════════════════════════════════════════ */
 function applyFilters() {
   filteredList = allTemplates.filter(t => {
-    const matchCat    = activeCategory === "All" || t.category === activeCategory;
+    const matchCat    = activeCategory === "All" || t.Category === activeCategory;
     const matchSearch = !searchQuery ||
-      (t.title       || "").toLowerCase().includes(searchQuery) ||
-      (t.description || "").toLowerCase().includes(searchQuery) ||
-      (t.category    || "").toLowerCase().includes(searchQuery);
+      (t.Title       || "").toLowerCase().includes(searchQuery) ||
+      (t.Description || "").toLowerCase().includes(searchQuery) ||
+      (t.Category    || "").toLowerCase().includes(searchQuery);
     return matchCat && matchSearch;
   });
   renderTemplates();
@@ -185,10 +260,10 @@ function buildCard(template, index) {
       </svg>
     </div>
     <div class="card-body">
-      <div class="card-name">${escHtml(template.title || "Untitled")}</div>
-      ${template.description ? `<div class="card-desc">${escHtml(template.description)}</div>` : ""}
+      <div class="card-name">${escHtml(template.Title || "Untitled")}</div>
+      ${template.Description ? `<div class="card-desc">${escHtml(template.Description)}</div>` : ""}
       <div class="card-meta">
-        ${template.category ? `<span class="card-category">${escHtml(template.category)}</span>` : ""}
+        ${template.Category ? `<span class="card-category">${escHtml(template.Category)}</span>` : ""}
       </div>
     </div>
     <div class="card-arrow">
@@ -205,14 +280,14 @@ function buildCard(template, index) {
 ═══════════════════════════════════════════════════════════════ */
 async function openPreview(template) {
   selectedTemplate = template;
-  document.getElementById("previewTitle").textContent = template.title || "Preview";
+  document.getElementById("previewTitle").textContent = template.Title || "Preview";
   document.getElementById("previewBody").innerHTML    = '<div class="spinner"></div>';
   document.getElementById("previewOverlay").classList.remove("hidden");
 
   try {
-    if (!template.templateFileUrl) throw new Error("This template has no file URL configured.");
+    if (!template.TemplateFileUrl) throw new Error("No file URL configured for this template.");
 
-    const html   = await fetchTemplateHtml(template.templateFileUrl);
+    const html   = await fetchTemplateHtml(template.TemplateFileUrl);
     const iframe = document.createElement("iframe");
     iframe.sandbox = "allow-same-origin";
     document.getElementById("previewBody").innerHTML = "";
@@ -244,7 +319,7 @@ async function insertTemplate() {
   insertBtn.disabled    = true;
 
   try {
-    const html = await fetchTemplateHtml(selectedTemplate.templateFileUrl);
+    const html = await fetchTemplateHtml(selectedTemplate.TemplateFileUrl);
 
     await new Promise((resolve, reject) => {
       Office.context.mailbox.item.body.setAsync(
