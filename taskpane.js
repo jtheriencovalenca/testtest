@@ -1,27 +1,26 @@
 /* ═══════════════════════════════════════════════════════════════
    CONFIG
+   
+   CATALOG_URL: raw GitHub URL to templates.json in your repo.
+   To add/remove templates, edit templates.json and push to GitHub.
+   
+   Template HTML files still live in SharePoint — authors edit
+   them there freely. Only the catalog index lives on GitHub.
 ═══════════════════════════════════════════════════════════════ */
 const CONFIG = {
-  // SharePoint site root
-  siteUrl: "https://covalenca.sharepoint.com/sites/InnovationMarketing",
-
-  // Exact internal name of the SharePoint List (template catalog)
-  listName: "EmailTemplatesCatalog",
-
-  // Cache TTL in ms (5 minutes)
-  cacheTtl: 5 * 60 * 1000,
+  catalogUrl: "https://raw.githubusercontent.com/jtheriencovalenca/testtest/main/templates.json",
+  cacheTtl:   5 * 60 * 1000, // 5 minutes
 };
 
 /* ═══════════════════════════════════════════════════════════════
    STATE
 ═══════════════════════════════════════════════════════════════ */
-let allTemplates    = [];
-let filteredList    = [];
-let activeCategory  = "All";
-let searchQuery     = "";
-let cacheTimestamp  = 0;
+let allTemplates     = [];
+let filteredList     = [];
+let activeCategory   = "All";
+let searchQuery      = "";
+let cacheTimestamp   = 0;
 let selectedTemplate = null;
-let accessToken     = null;   // cached AAD token
 
 /* ═══════════════════════════════════════════════════════════════
    OFFICE INIT
@@ -38,32 +37,8 @@ function init() {
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   AUTHENTICATION — Office SSO → AAD token for SharePoint
-   
-   The add-in requests an access token from Office using the
-   user's existing M365 session. No login prompt appears.
-   The token is then sent as a Bearer header to SharePoint REST.
-═══════════════════════════════════════════════════════════════ */
-async function getToken() {
-  if (accessToken) return accessToken;
-
-  return new Promise((resolve, reject) => {
-    Office.context.auth.getAccessTokenAsync(
-      { allowSignInPrompt: false, allowConsentPrompt: false, forMSGraphAccess: false },
-      (result) => {
-        if (result.status === Office.AsyncResultStatus.Succeeded) {
-          accessToken = result.value;
-          resolve(accessToken);
-        } else {
-          reject(new Error(result.error?.message || "Auth failed"));
-        }
-      }
-    );
-  });
-}
-
-/* ═══════════════════════════════════════════════════════════════
-   DATA FETCHING — SharePoint REST API with Bearer token
+   LOAD CATALOG — fetches templates.json from GitHub (same origin,
+   no auth needed). Raw GitHub URLs are public and CORS-friendly.
 ═══════════════════════════════════════════════════════════════ */
 async function loadTemplates() {
   if (allTemplates.length > 0 && Date.now() - cacheTimestamp < CONFIG.cacheTtl) {
@@ -74,47 +49,11 @@ async function loadTemplates() {
   showState("loading");
 
   try {
-    let token;
-    try {
-      token = await getToken();
-    } catch (authErr) {
-      // SSO not configured yet — fall back to same-origin fetch
-      // (works when taskpane is hosted on SharePoint itself)
-      token = null;
-    }
-
-    const endpoint =
-      `${CONFIG.siteUrl}/_api/web/lists/getbytitle('${encodeURIComponent(CONFIG.listName)}')/items` +
-      `?$select=Title,Category,Description,TemplateFileUrl,IsActive` +
-      `&$filter=IsActive eq 1` +
-      `&$orderby=Category,Title` +
-      `&$top=500`;
-
-    const headers = {
-      "Accept": "application/json;odata=nometadata",
-    };
-    if (token) {
-      headers["Authorization"] = `Bearer ${token}`;
-    }
-
-    const response = await fetch(endpoint, {
-      headers,
-      credentials: token ? "omit" : "include",
-    });
-
-    if (response.status === 401) {
-      // Token expired or SSO not set up — show a sign-in prompt
-      showState("error", "Sign-in required. Please close and reopen the panel.");
-      accessToken = null;
-      return;
-    }
-
-    if (!response.ok) {
-      throw new Error(`SharePoint returned ${response.status}: ${response.statusText}`);
-    }
+    const response = await fetch(CONFIG.catalogUrl + "?t=" + Date.now()); // bust CDN cache
+    if (!response.ok) throw new Error(`Could not load template catalog (${response.status}).`);
 
     const data = await response.json();
-    allTemplates   = data.value || [];
+    allTemplates   = data.filter(t => t.isActive !== false); // exclude isActive: false
     cacheTimestamp = Date.now();
 
     buildCategoryPills();
@@ -122,29 +61,27 @@ async function loadTemplates() {
     spinRefresh(false);
 
   } catch (err) {
-    console.error("[TemplateAddin] Failed to load templates:", err);
-    showState("error", err.message || "Unknown error.");
+    console.error("[TemplateAddin] Failed to load catalog:", err);
+    showState("error", err.message || "Could not load templates.json from GitHub.");
     spinRefresh(false);
   }
 }
 
 /* ═══════════════════════════════════════════════════════════════
-   FETCH TEMPLATE HTML FILE
-   Uses the same token so cross-origin requests to SharePoint work.
+   FETCH TEMPLATE HTML FROM SHAREPOINT
+   
+   Uses credentials:"include" so the browser sends the user's
+   existing SharePoint session cookie. This works because OWA
+   runs in the same browser where the user is signed into M365.
+   No token or Azure AD setup needed.
 ═══════════════════════════════════════════════════════════════ */
 async function fetchTemplateHtml(fileUrl) {
-  const headers = {};
-  if (accessToken) {
-    headers["Authorization"] = `Bearer ${accessToken}`;
-  }
-
   const response = await fetch(fileUrl, {
-    headers,
-    credentials: accessToken ? "omit" : "include",
+    credentials: "include",
   });
 
   if (!response.ok) {
-    throw new Error(`Could not fetch template file (${response.status}).`);
+    throw new Error(`Could not fetch template file (${response.status}). Make sure the file exists in SharePoint and you have access.`);
   }
 
   return await response.text();
@@ -156,7 +93,6 @@ async function fetchTemplateHtml(fileUrl) {
 function bindEvents() {
   document.getElementById("refreshBtn").addEventListener("click", () => {
     cacheTimestamp = 0;
-    accessToken    = null;
     loadTemplates();
     spinRefresh(true);
   });
@@ -184,7 +120,7 @@ function buildCategoryPills() {
   const bar = document.getElementById("categoryBar");
   bar.querySelectorAll(".cat-pill:not([data-cat='All'])").forEach(el => el.remove());
 
-  const categories = [...new Set(allTemplates.map(t => t.Category).filter(Boolean))].sort();
+  const categories = [...new Set(allTemplates.map(t => t.category).filter(Boolean))].sort();
   categories.forEach(cat => {
     const pill = document.createElement("button");
     pill.className   = "cat-pill";
@@ -194,7 +130,9 @@ function buildCategoryPills() {
     bar.appendChild(pill);
   });
 
-  bar.querySelector("[data-cat='All']").addEventListener("click", () => selectCategory("All"));
+  // re-bind All pill (safe to rebind)
+  const allPill = bar.querySelector("[data-cat='All']");
+  allPill.onclick = () => selectCategory("All");
 }
 
 function selectCategory(cat) {
@@ -210,11 +148,11 @@ function selectCategory(cat) {
 ═══════════════════════════════════════════════════════════════ */
 function applyFilters() {
   filteredList = allTemplates.filter(t => {
-    const matchCat    = activeCategory === "All" || t.Category === activeCategory;
+    const matchCat    = activeCategory === "All" || t.category === activeCategory;
     const matchSearch = !searchQuery ||
-      (t.Title       || "").toLowerCase().includes(searchQuery) ||
-      (t.Description || "").toLowerCase().includes(searchQuery) ||
-      (t.Category    || "").toLowerCase().includes(searchQuery);
+      (t.title       || "").toLowerCase().includes(searchQuery) ||
+      (t.description || "").toLowerCase().includes(searchQuery) ||
+      (t.category    || "").toLowerCase().includes(searchQuery);
     return matchCat && matchSearch;
   });
   renderTemplates();
@@ -247,10 +185,10 @@ function buildCard(template, index) {
       </svg>
     </div>
     <div class="card-body">
-      <div class="card-name">${escHtml(template.Title || "Untitled")}</div>
-      ${template.Description ? `<div class="card-desc">${escHtml(template.Description)}</div>` : ""}
+      <div class="card-name">${escHtml(template.title || "Untitled")}</div>
+      ${template.description ? `<div class="card-desc">${escHtml(template.description)}</div>` : ""}
       <div class="card-meta">
-        ${template.Category ? `<span class="card-category">${escHtml(template.Category)}</span>` : ""}
+        ${template.category ? `<span class="card-category">${escHtml(template.category)}</span>` : ""}
       </div>
     </div>
     <div class="card-arrow">
@@ -267,14 +205,14 @@ function buildCard(template, index) {
 ═══════════════════════════════════════════════════════════════ */
 async function openPreview(template) {
   selectedTemplate = template;
-  document.getElementById("previewTitle").textContent = template.Title || "Preview";
+  document.getElementById("previewTitle").textContent = template.title || "Preview";
   document.getElementById("previewBody").innerHTML    = '<div class="spinner"></div>';
   document.getElementById("previewOverlay").classList.remove("hidden");
 
   try {
-    if (!template.TemplateFileUrl) throw new Error("This template has no file URL configured.");
+    if (!template.templateFileUrl) throw new Error("This template has no file URL configured.");
 
-    const html   = await fetchTemplateHtml(template.TemplateFileUrl);
+    const html   = await fetchTemplateHtml(template.templateFileUrl);
     const iframe = document.createElement("iframe");
     iframe.sandbox = "allow-same-origin";
     document.getElementById("previewBody").innerHTML = "";
@@ -306,7 +244,7 @@ async function insertTemplate() {
   insertBtn.disabled    = true;
 
   try {
-    const html = await fetchTemplateHtml(selectedTemplate.TemplateFileUrl);
+    const html = await fetchTemplateHtml(selectedTemplate.templateFileUrl);
 
     await new Promise((resolve, reject) => {
       Office.context.mailbox.item.body.setAsync(
@@ -336,8 +274,10 @@ async function insertTemplate() {
 ═══════════════════════════════════════════════════════════════ */
 function showState(state, errorMsg) {
   hideAllStates();
-  if (state === "loading") document.getElementById("stateLoading").classList.remove("hidden");
-  else if (state === "empty") document.getElementById("stateEmpty").classList.remove("hidden");
+  if (state === "loading")
+    document.getElementById("stateLoading").classList.remove("hidden");
+  else if (state === "empty")
+    document.getElementById("stateEmpty").classList.remove("hidden");
   else if (state === "error") {
     document.getElementById("stateErrorMsg").textContent = errorMsg || "Could not load templates.";
     document.getElementById("stateError").classList.remove("hidden");
@@ -352,7 +292,7 @@ function hideAllStates() {
 
 function showToast(message, isError = false) {
   const toast = document.getElementById("toast");
-  toast.textContent  = message;
+  toast.textContent = message;
   toast.style.background = isError ? "var(--danger)" : "var(--text)";
   toast.classList.remove("hidden");
   setTimeout(() => toast.classList.add("hidden"), 3000);

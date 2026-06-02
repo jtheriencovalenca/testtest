@@ -1,0 +1,10 @@
+[
+  {
+    "id": "1",
+    "title": "General Introduction",
+    "category": "General",
+    "description": "A friendly introduction email for new contacts.",
+    "templateFileUrl": "https://covalenca.sharepoint.com/sites/InnovationMarketing/TemplateManager%20OutlookHTML/general-introduction.html",
+    "isActive": true
+  }
+]
